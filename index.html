@@ -5,11 +5,20 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Maroela Nuus</title>
+  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+  <script>
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    OneSignalDeferred.push(async function(OneSignal) {
+      await OneSignal.init({
+        appId: "7d573c1f-1dcb-40d1-a477-1fbc8981ba06"
+      });
+    });
+  </script>
 </head>
 <body>
   <h1>Maroela Nuus</h1>
   <p>Afrikaanse nuuskennisgewings vir jou iPhone.</p>
-  <p>Hierdie blad sal gebruik word vir jou Maroela Nuus-projek.</p>
+  <p>Hierdie blad word gebruik vir jou Maroela Nuus-kennisgewings.</p>
   <p>
     <a href="https://www.facebook.com/MaroelaMedia/">
       Maak Maroela Media op Facebook oop

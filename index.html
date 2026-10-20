@@ -1,31 +1,54 @@
+html
 <!DOCTYPE html>
 <html lang="af">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Maroela Nuus</title>
+
   <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+
   <script>
     window.OneSignalDeferred = window.OneSignalDeferred || [];
     OneSignalDeferred.push(async function(OneSignal) {
       await OneSignal.init({
-        appId: "7d573c1f-1dcb-40d1-a477-1fbc8981ba06",
-        serviceWorkerPath: "/Maroela-Nuus/OneSignalSDKWorker.js",
-        serviceWorkerParam: {
-          scope: "/Maroela-Nuus/"
-        }
+        appId: "90051a02-9265-4f58-8771-6d556de395ad"
       });
     });
   </script>
 </head>
 <body>
   <h1>Maroela Nuus</h1>
-  <p>Afrikaanse nuuskennisgewings vir jou iPhone.</p>
-  <p>Hierdie blad word gebruik vir jou Maroela Nuus-kennisgewings.</p>
+  <p>Afrikaanse nuuskennisgewings vir jou iPhone en rekenaar.</p>
+
+  <button id="subscribeButton" type="button">
+    Subscribe for notifications
+  </button>
+
+  <p id="status" aria-live="polite"></p>
+
   <p>
     <a href="https://www.facebook.com/MaroelaMedia/">
       Maak Maroela Media op Facebook oop
     </a>
   </p>
+
+  <script>
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    OneSignalDeferred.push(async function(OneSignal) {
+      const button = document.getElementById("subscribeButton");
+      const status = document.getElementById("status");
+
+      button.addEventListener("click", async function() {
+        try {
+          await OneSignal.Notifications.requestPermission();
+          status.textContent = "Kennisgewingtoestemming is aangevra.";
+        } catch (error) {
+          status.textContent = "Die intekening kon nie voltooi word nie.";
+          console.error(error);
+        }
+      });
+    });
+  </script>
 </body>
 </html>

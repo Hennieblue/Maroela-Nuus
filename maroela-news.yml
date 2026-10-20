@@ -1,0 +1,126 @@
+name: Maroela Nuus Notifications
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: maroela-news-notifications
+  cancel-in-progress: false
+
+jobs:
+  check-news:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check RSS and send notification for new articles
+        env:
+          ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
+          ONESIGNAL_REST_API_KEY: ${{ secrets.ONESIGNAL_REST_API_KEY }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          import urllib.error
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          FEED_URL = "https://maroelamedia.co.za/feed/"
+          STATE_FILE = Path("maroela_last_article.json")
+          APP_ID = os.environ.get("ONESIGNAL_APP_ID", "").strip()
+          API_KEY = os.environ.get("ONESIGNAL_REST_API_KEY", "").strip()
+
+          if not APP_ID or not API_KEY:
+              raise SystemExit(
+                  "Missing GitHub Secrets: ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY."
+              )
+
+          request = urllib.request.Request(
+              FEED_URL,
+              headers={"User-Agent": "Maroela-Nuus-GitHub-Actions/1.0"}
+          )
+          with urllib.request.urlopen(request, timeout=30) as response:
+              xml_data = response.read()
+
+          root = ET.fromstring(xml_data)
+          channel = root.find("channel")
+          items = channel.findall("item") if channel is not None else []
+          if not items:
+              print("RSS feed contains no articles; nothing to do.")
+              raise SystemExit(0)
+
+          latest = items[0]
+          title = (latest.findtext("title") or "Nuwe Maroela-nuus").strip()
+          link = (latest.findtext("link") or FEED_URL).strip()
+          guid = (latest.findtext("guid") or link).strip()
+
+          previous_guid = ""
+          if STATE_FILE.exists():
+              try:
+                  previous_guid = json.loads(STATE_FILE.read_text(encoding="utf-8")).get("guid", "")
+              except Exception:
+                  previous_guid = ""
+
+          if guid == previous_guid:
+              print("No new article.")
+              raise SystemExit(0)
+
+          # Save the latest article ID so repeated runs do not send it again.
+          STATE_FILE.write_text(
+              json.dumps({"guid": guid, "title": title, "link": link}, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8"
+          )
+
+          payload = {
+              "app_id": APP_ID,
+              "included_segments": ["Subscribed Users"],
+              "headings": {"en": "Maroela Nuus"},
+              "contents": {"en": title},
+              "url": link,
+          }
+          body = json.dumps(payload).encode("utf-8")
+          api_request = urllib.request.Request(
+              "https://api.onesignal.com/notifications",
+              data=body,
+              headers={
+                  "Content-Type": "application/json; charset=utf-8",
+                  "Authorization": f"Key {API_KEY}",
+              },
+              method="POST",
+          )
+
+          try:
+              with urllib.request.urlopen(api_request, timeout=30) as response:
+                  result = response.read().decode("utf-8", errors="replace")
+                  print("OneSignal response:", result)
+          except urllib.error.HTTPError as error:
+              error_body = error.read().decode("utf-8", errors="replace")
+              print("OneSignal API error:", error.code, error_body)
+              raise
+
+          print(f"Sent notification for: {title} ({link})")
+          PY
+
+      - name: Save latest article marker
+        run: |
+          if git diff --quiet -- maroela_last_article.json; then
+            echo "No state change to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add maroela_last_article.json
+          git commit -m "Update last Maroela article marker"
+          git push

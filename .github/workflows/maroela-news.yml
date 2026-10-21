@@ -15,6 +15,7 @@ concurrency:
 jobs:
   check-news:
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -51,12 +52,14 @@ jobs:
               FEED_URL,
               headers={"User-Agent": "Maroela-Nuus-GitHub-Actions/1.0"}
           )
+
           with urllib.request.urlopen(request, timeout=30) as response:
               xml_data = response.read()
 
           root = ET.fromstring(xml_data)
           channel = root.find("channel")
           items = channel.findall("item") if channel is not None else []
+
           if not items:
               print("RSS feed contains no articles; nothing to do.")
               raise SystemExit(0)
@@ -69,19 +72,17 @@ jobs:
           previous_guid = ""
           if STATE_FILE.exists():
               try:
-                  previous_guid = json.loads(STATE_FILE.read_text(encoding="utf-8")).get("guid", "")
-              except Exception:
+                  previous_guid = json.loads(
+                      STATE_FILE.read_text(encoding="utf-8")
+                  ).get("guid", "")
+              except (json.JSONDecodeError, OSError):
                   previous_guid = ""
 
           if guid == previous_guid:
               print("No new article.")
               raise SystemExit(0)
 
-          # Save the latest article ID so repeated runs do not send it again.
-          STATE_FILE.write_text(
-              json.dumps({"guid": guid, "title": title, "link": link}, ensure_ascii=False, indent=2) + "\n",
-              encoding="utf-8"
-          )
+          print(f"New article found: {title}")
 
           payload = {
               "app_id": APP_ID,
@@ -90,7 +91,9 @@ jobs:
               "contents": {"en": title},
               "url": link,
           }
+
           body = json.dumps(payload).encode("utf-8")
+
           api_request = urllib.request.Request(
               "https://api.onesignal.com/notifications",
               data=body,
@@ -103,14 +106,49 @@ jobs:
 
           try:
               with urllib.request.urlopen(api_request, timeout=30) as response:
-                  result = response.read().decode("utf-8", errors="replace")
-                  print("OneSignal response:", result)
+                  response_body = response.read().decode(
+                      "utf-8", errors="replace"
+                  )
+                  status_code = response.status
+
           except urllib.error.HTTPError as error:
               error_body = error.read().decode("utf-8", errors="replace")
               print("OneSignal API error:", error.code, error_body)
-              raise
+              raise SystemExit("OneSignal rejected the notification.")
 
-          print(f"Sent notification for: {title} ({link})")
+          print("OneSignal HTTP status:", status_code)
+          print("OneSignal response:", response_body)
+
+          try:
+              result = json.loads(response_body)
+          except json.JSONDecodeError:
+              raise SystemExit("OneSignal returned an invalid JSON response.")
+
+          notification_id = result.get("id", "")
+          errors = result.get("errors")
+
+          if errors:
+              raise SystemExit(
+                  "OneSignal reported notification errors: "
+                  + json.dumps(errors, ensure_ascii=False)
+              )
+
+          if not notification_id:
+              raise SystemExit(
+                  "OneSignal did not return a notification ID. "
+                  "The notification was not confirmed as created."
+              )
+
+          STATE_FILE.write_text(
+              json.dumps(
+                  {"guid": guid, "title": title, "link": link},
+                  ensure_ascii=False,
+                  indent=2
+              ) + "\n",
+              encoding="utf-8"
+          )
+
+          print(f"Notification created successfully: {title} ({link})")
           PY
 
       - name: Save latest article marker
@@ -119,6 +157,7 @@ jobs:
             echo "No state change to commit."
             exit 0
           fi
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add maroela_last_article.json

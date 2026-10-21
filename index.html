@@ -1,4 +1,3 @@
-html
 <!DOCTYPE html>
 <html lang="af">
 <head>
@@ -14,6 +13,33 @@ html
       await OneSignal.init({
         appId: "90051a02-9265-4f58-8771-6d556de395ad"
       });
+
+      const button = document.getElementById("subscribeButton");
+      const status = document.getElementById("status");
+
+      button.addEventListener("click", async function() {
+        button.disabled = true;
+        status.textContent = "Besig om intekening te aktiveer...";
+
+        try {
+          await OneSignal.User.PushSubscription.optIn();
+
+          const subscribed = OneSignal.User.PushSubscription.optedIn;
+
+          if (subscribed) {
+            status.textContent = "Maroela Nuus-kennisgewings is geaktiveer.";
+          } else {
+            status.textContent =
+              "Intekening is nog nie aktief nie. Kontroleer kennisgewingtoestemming.";
+          }
+        } catch (error) {
+          status.textContent =
+            "Intekening kon nie voltooi word nie. Probeer asseblief weer.";
+          console.error("OneSignal intekeningfout:", error);
+        } finally {
+          button.disabled = false;
+        }
+      });
     });
   </script>
 </head>
@@ -25,30 +51,14 @@ html
     Subscribe for notifications
   </button>
 
-  <p id="status" aria-live="polite"></p>
+  <p id="status" aria-live="polite">
+    Druk die knoppie om Maroela Nuus-kennisgewings te aktiveer.
+  </p>
 
   <p>
     <a href="https://www.facebook.com/MaroelaMedia/">
       Maak Maroela Media op Facebook oop
     </a>
   </p>
-
-  <script>
-    window.OneSignalDeferred = window.OneSignalDeferred || [];
-    OneSignalDeferred.push(async function(OneSignal) {
-      const button = document.getElementById("subscribeButton");
-      const status = document.getElementById("status");
-
-      button.addEventListener("click", async function() {
-        try {
-          await OneSignal.Notifications.requestPermission();
-          status.textContent = "Kennisgewingtoestemming is aangevra.";
-        } catch (error) {
-          status.textContent = "Die intekening kon nie voltooi word nie.";
-          console.error(error);
-        }
-      });
-    });
-  </script>
 </body>
 </html>

@@ -86,7 +86,7 @@ jobs:
 
           payload = {
               "app_id": APP_ID,
-              "included_segments": ["Subscribed Users"],
+              "include_subscription_ids": ["de129f09-55e3-4b9f-a5f1-d1a1bd7dd752"],
               "headings": {"en": "Maroela Nuus"},
               "contents": {"en": title},
               "url": link,

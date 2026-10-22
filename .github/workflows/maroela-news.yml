@@ -2,7 +2,7 @@ name: Maroela Nuus Notifications
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -25,7 +25,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check RSS and send notification for new articles
+      - name: Check RSS and send notifications
+        id: send_news
         env:
           ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
           ONESIGNAL_REST_API_KEY: ${{ secrets.ONESIGNAL_REST_API_KEY }}
@@ -40,17 +41,22 @@ jobs:
 
           FEED_URL = "https://maroelamedia.co.za/feed/"
           STATE_FILE = Path("maroela_last_article.json")
+          SUBSCRIPTION_ID = "de129f09-55e3-4b9f-a5f1-d1a1bd7dd752"
+
           APP_ID = os.environ.get("ONESIGNAL_APP_ID", "").strip()
           API_KEY = os.environ.get("ONESIGNAL_REST_API_KEY", "").strip()
 
           if not APP_ID or not API_KEY:
               raise SystemExit(
-                  "Missing GitHub Secrets: ONESIGNAL_APP_ID and ONESIGNAL_REST_API_KEY."
+                  "Missing GitHub Secrets: ONESIGNAL_APP_ID "
+                  "and ONESIGNAL_REST_API_KEY."
               )
 
           request = urllib.request.Request(
               FEED_URL,
-              headers={"User-Agent": "Maroela-Nuus-GitHub-Actions/1.0"}
+              headers={
+                  "User-Agent": "Maroela-Nuus-GitHub-Actions/1.0"
+              }
           )
 
           with urllib.request.urlopen(request, timeout=30) as response:
@@ -61,16 +67,11 @@ jobs:
           items = channel.findall("item") if channel is not None else []
 
           if not items:
-              print("RSS feed contains no articles; nothing to do.")
+              print("RSS feed contains no articles.")
               raise SystemExit(0)
 
-          latest = items[0]
-          title = (latest.findtext("title") or "Nuwe Maroela-nuus").strip()
-          description = (latest.findtext("description") or "").strip()
-          link = (latest.findtext("link") or FEED_URL).strip()
-          guid = (latest.findtext("guid") or link).strip()
-
           previous_guid = ""
+
           if STATE_FILE.exists():
               try:
                   previous_guid = json.loads(
@@ -79,80 +80,155 @@ jobs:
               except (json.JSONDecodeError, OSError):
                   previous_guid = ""
 
-          if guid == previous_guid:
-              print("No new article.")
+          new_items = []
+
+          if previous_guid:
+              found_previous = False
+
+              for item in items:
+                  item_link = (
+                      item.findtext("link") or FEED_URL
+                  ).strip()
+                  item_guid = (
+                      item.findtext("guid") or item_link
+                  ).strip()
+
+                  if item_guid == previous_guid:
+                      found_previous = True
+                      break
+
+                  new_items.append(item)
+
+              if not found_previous:
+                  print(
+                      "Previous article is not in the RSS feed. "
+                      "Stopping to avoid duplicate notifications."
+                  )
+                  raise SystemExit(0)
+
+          else:
+              new_items = items[:1]
+              print(
+                  "No previous marker. Processing only the latest article."
+              )
+
+          if not new_items:
+              print("No new articles.")
               raise SystemExit(0)
 
-          print(f"New article found: {title}")
+          new_items.reverse()
+          print(f"New articles found: {len(new_items)}")
 
-          payload = {
-              "app_id": APP_ID,
-              "include_subscription_ids": ["de129f09-55e3-4b9f-a5f1-d1a1bd7dd752"],
-              "headings": {"en": "Maroela Nuus"},
-              "contents": {"en": f"{title}\n\n{description}" if description else title},
-              "url": link,
-          }
+          for item in new_items:
+              title = (
+                  item.findtext("title") or "Nuwe Maroela-nuus"
+              ).strip()
+              description = (
+                  item.findtext("description") or ""
+              ).strip()
+              link = (
+                  item.findtext("link") or FEED_URL
+              ).strip()
+              guid = (
+                  item.findtext("guid") or link
+              ).strip()
 
-          body = json.dumps(payload).encode("utf-8")
+              print(f"Sending article: {title}")
 
-          api_request = urllib.request.Request(
-              "https://api.onesignal.com/notifications",
-              data=body,
-              headers={
-                  "Content-Type": "application/json; charset=utf-8",
-                  "Authorization": f"Key {API_KEY}",
-              },
-              method="POST",
-          )
+              payload = {
+                  "app_id": APP_ID,
+                  "include_subscription_ids": [SUBSCRIPTION_ID],
+                  "headings": {"en": "Maroela Nuus"},
+                  "contents": {
+                      "en": (
+                          f"{title}\n\n{description}"
+                          if description else title
+                      )
+                  },
+                  "url": link,
+              }
 
-          try:
-              with urllib.request.urlopen(api_request, timeout=30) as response:
-                  response_body = response.read().decode(
+              body = json.dumps(payload).encode("utf-8")
+
+              api_request = urllib.request.Request(
+                  "https://api.onesignal.com/notifications",
+                  data=body,
+                  headers={
+                      "Content-Type": "application/json; charset=utf-8",
+                      "Authorization": f"Key {API_KEY}",
+                  },
+                  method="POST",
+              )
+
+              try:
+                  with urllib.request.urlopen(
+                      api_request, timeout=30
+                  ) as response:
+                      response_body = response.read().decode(
+                          "utf-8", errors="replace"
+                      )
+                      status_code = response.status
+
+              except urllib.error.HTTPError as error:
+                  error_body = error.read().decode(
                       "utf-8", errors="replace"
                   )
-                  status_code = response.status
+                  print(
+                      "OneSignal API error:",
+                      error.code,
+                      error_body
+                  )
+                  raise SystemExit(
+                      "OneSignal rejected the notification."
+                  )
 
-          except urllib.error.HTTPError as error:
-              error_body = error.read().decode("utf-8", errors="replace")
-              print("OneSignal API error:", error.code, error_body)
-              raise SystemExit("OneSignal rejected the notification.")
+              print("OneSignal HTTP status:", status_code)
+              print("OneSignal response:", response_body)
 
-          print("OneSignal HTTP status:", status_code)
-          print("OneSignal response:", response_body)
+              try:
+                  result = json.loads(response_body)
+              except json.JSONDecodeError:
+                  raise SystemExit(
+                      "OneSignal returned invalid JSON."
+                  )
 
-          try:
-              result = json.loads(response_body)
-          except json.JSONDecodeError:
-              raise SystemExit("OneSignal returned an invalid JSON response.")
+              errors = result.get("errors")
+              notification_id = result.get("id", "")
 
-          notification_id = result.get("id", "")
-          errors = result.get("errors")
+              if errors:
+                  raise SystemExit(
+                      "OneSignal notification errors: "
+                      + json.dumps(errors, ensure_ascii=False)
+                  )
 
-          if errors:
-              raise SystemExit(
-                  "OneSignal reported notification errors: "
-                  + json.dumps(errors, ensure_ascii=False)
+              if not notification_id:
+                  raise SystemExit(
+                      "OneSignal did not confirm notification creation."
+                  )
+
+              STATE_FILE.write_text(
+                  json.dumps(
+                      {
+                          "guid": guid,
+                          "title": title,
+                          "link": link
+                      },
+                      ensure_ascii=False,
+                      indent=2
+                  ) + "\n",
+                  encoding="utf-8"
               )
 
-          if not notification_id:
-              raise SystemExit(
-                  "OneSignal did not return a notification ID. "
-                  "The notification was not confirmed as created."
+              print(
+                  f"Notification created successfully: "
+                  f"{title} ({link})"
               )
 
-          STATE_FILE.write_text(
-              json.dumps(
-                  {"guid": guid, "title": title, "link": link},
-                  ensure_ascii=False,
-                  indent=2
-              ) + "\n",
-              encoding="utf-8"
-          )
-
-          print(f"Notification created successfully: {title} ({link})")
+          print("All new article notifications processed.")
           PY
 
       - name: Save latest article marker
+        if: always() && steps.send_news.outcome != 'skipped'
         run: |
           if git diff --quiet -- maroela_last_article.json; then
             echo "No state change to commit."
@@ -160,7 +236,7 @@ jobs:
           fi
 
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "41898282+users.noreply.github.com"
           git add maroela_last_article.json
           git commit -m "Update last Maroela article marker"
           git push

@@ -25,7 +25,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Check RSS and send notifications
+      - name: Collect and send Maroela articles
         id: send_news
         env:
           ONESIGNAL_APP_ID: ${{ secrets.ONESIGNAL_APP_ID }}
@@ -41,6 +41,7 @@ jobs:
 
           FEED_URL = "https://maroelamedia.co.za/feed/"
           STATE_FILE = Path("maroela_last_article.json")
+
           SUBSCRIPTION_IDS = [
               "de129f09-55e3-4b9f-a5f1-d1a1bd7dd752",
               "d8d7d459-d627-4f46-ba16-c285913d041a",
@@ -51,9 +52,31 @@ jobs:
 
           if not APP_ID or not API_KEY:
               raise SystemExit(
-                  "Missing GitHub Secrets: ONESIGNAL_APP_ID "
-                  "and ONESIGNAL_REST_API_KEY."
+                  "Missing ONESIGNAL_APP_ID or ONESIGNAL_REST_API_KEY."
               )
+
+          state = {}
+          if STATE_FILE.exists():
+              try:
+                  state = json.loads(
+                      STATE_FILE.read_text(encoding="utf-8")
+                  )
+              except (json.JSONDecodeError, OSError):
+                  raise SystemExit(
+                      "Could not read article state safely."
+                  )
+
+          previous_guid = state.get("guid", "")
+          seen_guids = state.get("seen_guids", [])
+          pending = state.get("pending", [])
+
+          if not isinstance(seen_guids, list):
+              seen_guids = []
+          if not isinstance(pending, list):
+              raise SystemExit("Pending article queue is invalid.")
+
+          if previous_guid and previous_guid not in seen_guids:
+              seen_guids.append(previous_guid)
 
           request = urllib.request.Request(
               FEED_URL,
@@ -69,72 +92,91 @@ jobs:
           channel = root.find("channel")
           items = channel.findall("item") if channel is not None else []
 
-          if not items:
-              print("RSS feed contains no articles.")
-              raise SystemExit(0)
+          def article_data(item):
+              link = (item.findtext("link") or FEED_URL).strip()
+              guid = (item.findtext("guid") or link).strip()
+              return {
+                  "guid": guid,
+                  "title": (
+                      item.findtext("title") or "Nuwe Maroela-nuus"
+                  ).strip(),
+                  "description": (
+                      item.findtext("description") or ""
+                  ).strip(),
+                  "link": link,
+              }
 
-          previous_guid = ""
+          articles = [article_data(item) for item in items]
+          pending_guids = {
+              article.get("guid", "") for article in pending
+          }
 
-          if STATE_FILE.exists():
-              try:
-                  previous_guid = json.loads(
-                      STATE_FILE.read_text(encoding="utf-8")
-                  ).get("guid", "")
-              except (json.JSONDecodeError, OSError):
-                  previous_guid = ""
+          new_articles = []
 
-          new_items = []
-
-          if previous_guid:
-              found_previous = False
-
-              for item in items:
-                  item_link = (
-                      item.findtext("link") or FEED_URL
-                  ).strip()
-                  item_guid = (
-                      item.findtext("guid") or item_link
-                  ).strip()
-
-                  if item_guid == previous_guid:
-                      found_previous = True
-                      break
-
-                  new_items.append(item)
-
-              if not found_previous:
-                  print(
-                      "Previous article is not in the RSS feed. "
-                      "Stopping to avoid duplicate notifications."
-                  )
-                  raise SystemExit(0)
+          if not previous_guid:
+              # First run: avoid sending the entire old RSS history.
+              new_articles = articles[:1]
+              print("No previous marker: starting with latest article.")
 
           else:
-              new_items = items[:1]
-              print(
-                  "No previous marker. Processing only the latest article."
+              previous_found = False
+
+              for article in articles:
+                  if article["guid"] == previous_guid:
+                      previous_found = True
+                      break
+
+                  if (
+                      article["guid"] not in seen_guids
+                      and article["guid"] not in pending_guids
+                  ):
+                      new_articles.append(article)
+
+              if not previous_found:
+                  print(
+                      "Previous marker is no longer in RSS. "
+                      "Collecting currently available unseen articles."
+                  )
+
+          # RSS is newest first; queue oldest new article first.
+          new_articles.reverse()
+
+          for article in new_articles:
+              pending.append(article)
+              pending_guids.add(article["guid"])
+              seen_guids.append(article["guid"])
+
+          if articles:
+              state["guid"] = articles[0]["guid"]
+              state["title"] = articles[0]["title"]
+              state["link"] = articles[0]["link"]
+
+          # Save the queue before sending, so pending articles can be retried.
+          state["pending"] = pending
+          state["seen_guids"] = list(dict.fromkeys(seen_guids))[-500:]
+
+          def save_state():
+              STATE_FILE.write_text(
+                  json.dumps(
+                      state,
+                      ensure_ascii=False,
+                      indent=2
+                  ) + "\n",
+                  encoding="utf-8"
               )
 
-          if not new_items:
-              print("No new articles.")
-              raise SystemExit(0)
+          save_state()
 
-          new_items.reverse()
-          print(f"New articles found: {len(new_items)}")
+          print(f"New articles queued: {len(new_articles)}")
+          print(f"Articles waiting to send: {len(pending)}")
 
-          for item in new_items:
-              title = (
-                  item.findtext("title") or "Nuwe Maroela-nuus"
-              ).strip()
-              description = (
-                  item.findtext("description") or ""
-              ).strip()
-              link = (
-                  item.findtext("link") or FEED_URL
-              ).strip()
-              guid = (
-                  item.findtext("guid") or link
-              ).strip()
+          while state["pending"]:
+              article = state["pending"][0]
+
+              title = article["title"]
+              description = article["description"]
+              link = article["link"]
+              guid = article["guid"]
 
               print(f"Sending article: {title}")
 
@@ -151,11 +193,9 @@ jobs:
                   "url": link,
               }
 
-              body = json.dumps(payload).encode("utf-8")
-
               api_request = urllib.request.Request(
                   "https://api.onesignal.com/notifications",
-                  data=body,
+                  data=json.dumps(payload).encode("utf-8"),
                   headers={
                       "Content-Type": "application/json; charset=utf-8",
                       "Authorization": f"Key {API_KEY}",
@@ -170,67 +210,45 @@ jobs:
                       response_body = response.read().decode(
                           "utf-8", errors="replace"
                       )
-                      status_code = response.status
+                      print("OneSignal HTTP status:", response.status)
 
               except urllib.error.HTTPError as error:
                   error_body = error.read().decode(
                       "utf-8", errors="replace"
                   )
-                  print(
-                      "OneSignal API error:",
-                      error.code,
-                      error_body
-                  )
+                  print("OneSignal API error:", error.code, error_body)
                   raise SystemExit(
-                      "OneSignal rejected the notification."
+                      "Notification failed; article remains queued."
                   )
 
-              print("OneSignal HTTP status:", status_code)
               print("OneSignal response:", response_body)
 
               try:
                   result = json.loads(response_body)
               except json.JSONDecodeError:
                   raise SystemExit(
-                      "OneSignal returned invalid JSON."
+                      "Invalid OneSignal response; article remains queued."
                   )
 
-              errors = result.get("errors")
-              notification_id = result.get("id", "")
-
-              if errors:
+              if result.get("errors") or not result.get("id"):
                   raise SystemExit(
-                      "OneSignal notification errors: "
-                      + json.dumps(errors, ensure_ascii=False)
+                      "OneSignal did not confirm notification creation; "
+                      "article remains queued."
                   )
 
-              if not notification_id:
-                  raise SystemExit(
-                      "OneSignal did not confirm notification creation."
-                  )
+              print(f"Notification created successfully: {title}")
 
-              STATE_FILE.write_text(
-                  json.dumps(
-                      {
-                          "guid": guid,
-                          "title": title,
-                          "link": link
-                      },
-                      ensure_ascii=False,
-                      indent=2
-                  ) + "\n",
-                  encoding="utf-8"
-              )
+              # Remove only after OneSignal confirms creation.
+              state["pending"] = [
+                  queued for queued in state["pending"]
+                  if queued.get("guid") != guid
+              ]
+              save_state()
 
-              print(
-                  f"Notification created successfully: "
-                  f"{title} ({link})"
-              )
-
-          print("All new article notifications processed.")
+          print("All queued article notifications processed.")
           PY
 
-      - name: Save latest article marker
+      - name: Save article queue and marker
         if: always() && steps.send_news.outcome != 'skipped'
         run: |
           if git diff --quiet -- maroela_last_article.json; then
@@ -239,7 +257,7 @@ jobs:
           fi
 
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+users.noreply.github.com"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add maroela_last_article.json
-          git commit -m "Update last Maroela article marker"
+          git commit -m "Update Maroela article queue"
           git push

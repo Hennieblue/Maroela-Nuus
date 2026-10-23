@@ -41,7 +41,10 @@ jobs:
 
           FEED_URL = "https://maroelamedia.co.za/feed/"
           STATE_FILE = Path("maroela_last_article.json")
-          SUBSCRIPTION_ID = "de129f09-55e3-4b9f-a5f1-d1a1bd7dd752"
+          SUBSCRIPTION_IDS = [
+              "de129f09-55e3-4b9f-a5f1-d1a1bd7dd752",
+              "d8d7d459-d627-4f46-ba16-c285913d041a",
+          ]
 
           APP_ID = os.environ.get("ONESIGNAL_APP_ID", "").strip()
           API_KEY = os.environ.get("ONESIGNAL_REST_API_KEY", "").strip()
@@ -137,7 +140,7 @@ jobs:
 
               payload = {
                   "app_id": APP_ID,
-                  "include_subscription_ids": [SUBSCRIPTION_ID],
+                  "include_subscription_ids": SUBSCRIPTION_IDS,
                   "headings": {"en": "Maroela Nuus"},
                   "contents": {
                       "en": (

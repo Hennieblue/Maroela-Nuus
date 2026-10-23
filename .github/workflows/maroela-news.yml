@@ -248,16 +248,18 @@ jobs:
           print("All queued article notifications processed.")
           PY
 
+
       - name: Save article queue and marker
         if: always() && steps.send_news.outcome != 'skipped'
         run: |
-          if git diff --quiet -- maroela_last_article.json; then
+          git add maroela_last_article.json
+
+          if git diff --cached --quiet -- maroela_last_article.json; then
             echo "No state change to commit."
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add maroela_last_article.json
+          git config user.email "41898282+users.noreply.github.com"
           git commit -m "Update Maroela article queue"
           git push

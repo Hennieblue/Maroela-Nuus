@@ -45,6 +45,7 @@ jobs:
           SUBSCRIPTION_IDS = [
               "de129f09-55e3-4b9f-a5f1-d1a1bd7dd752",
               "d8d7d459-d627-4f46-ba16-c285913d041a",
+          "ab9d3a45-7390-4b4b-bcd7-d59c697acbc3",
           ]
 
           APP_ID = os.environ.get("ONESIGNAL_APP_ID", "").strip()
